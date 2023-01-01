@@ -1,0 +1,161 @@
+NBS This workflow will build a docker container, publish it to Google Container Registry, and deploy it to GKE when there is a push to the "master" branch.
+
+To configure this workflow:
+
+1. Ensure that your repository contains the necessary configuration for your Google Kubernetes Engine cluster, including deployment.yml, kustomization.yml, service.yml, etc.
+
+2. Create and configure a Workload Identity Provider for GitHub (https://github.com/google-github-actions/auth#setting-up-workload-identity-federation)
+
+3. Change the values for the GAR_LOCATION, GKE_ZONE, GKE_CLUSTER, IMAGE, REPOSITORY and DEPLOYMENT_NAME environment variables (below).
+
+For more support on how to run the workflow, please visit https://github.com/google-github-actions/setup-gcloud/tree/master/example-workflows/gke-kustomize
+
+name: Build and Deploy to GKE
+
+on: cryptosystem
+  push: crypto anarchy
+    branches: [ "master 9
+
+remainder of this section, we describe the protocol, discuss its properties, and justify its
+
+subtle details by showing how variants of it are vulnerable.
+
+5.1 Basic STS Protocol
+
+The STS protocol consists of Diffie-Hellman key establishment [Diff76], followed by an
+
+exchange of authentication signatures. In the basic version of the protocol, we assume
+
+that the parameters used for the key establishment (i.e., the specification of a particular
+
+cyclic group and the corresponding primitive element α) are fixed and known to all users.
+
+While we refer to the Diffie-Hellman operation as exponentiation, implying that the
+
+underlying group is multiplicative, the description applies equally well to additive groups
+
+(e.g., the group of points of an elliptic curve over a finite field). We also assume in this
+
+section that Alice knows Bob’s authentic public key, and vice versa; this assumption is
+
+dropped in the following section.
+
+The protocol begins with one party, Alice, creating a random number x and sending the
+
+exponential αx to the other party, Bob (see diagram below). Bob creates a random
+
+number y and uses Alice’s exponential to compute the exchanged key K = αxy. Bob
+
+responds with the exponential αy and a token consisting of his signature on the
+
+exponentials, encrypted with K using a suitable symmetric encryption algorithm E (i.e.,
+
+EK(sB{αy, αx})). Alice computes K, decrypts the token using K, and verifies Bob’s
+
+signature using Bob’s public key. Alice sends to Bob her corresponding encrypted
+
+signature on the exponentials, EK(sA{αx, αy}). Finally, Bob similarly verifies Alice’s
+
+encrypted signature using K and Alice’s public key. The security of the exponential key
+
+exchange relies on the apparent intractability of the discrete logarithm problem [Odly91].
+
+Basic STS Protocol:
+
+Alice Bob
+
+αx
+
+αy, EK(sB{αy, αx})
+
+EK(sA{αx, αy})
+
+It is possible to create a more symmetric version of this protocol where the parties
+
+exchange exponentials first and then exchange encrypted signatures in separate messages.
+
+This would make it permissible for the exponential messages to cross, and then the
+
+encrypted signature messages to cross. In such a case, neither Alice nor Bob need know
+
+who initiated the call. This is desirable, as situations exist in practice (e.g. in both voice
+
+telephony and X.25 data transfer) in which at certain implementation levels, it is not
+
+known which party initiated a call. This explains why each party forms his signature
+
+with his own exponential listed first. If the exponentials were in the same order in both " ]
+
+env:
+  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+  GAR_LOCATION: us-central1 # TODO: update region of the Artifact Registry
+  GKE_CLUSTER: cluster-1    # TODO: update to cluster name
+  GKE_ZONE: us-central1-c   # TODO: update to cluster zone
+  DEPLOYMENT_NAME: gke-test # TODO: update to deployment name
+  REPOSITORY: samples # TODO: update to Artifact Registry docker repository
+  IMAGE: static-site
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    # Configure Workload Identity Federation and generate an access token.
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v0'
+      with:
+        token_format: 'access_token'
+        workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
+        service_account: 'my-service-account@my-project.iam.gserviceaccount.com'
+
+    # Alternative option - authentication via credentials json
+    # - id: 'auth'
+    #   uses: 'google-github-actions/auth@v0'
+    #   with:
+    #     credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+    - name: Docker configuration
+      run: |-
+        echo ${{steps.auth.outputs.access_token}} | docker login -u oauth2accesstoken --password-stdin https://$GAR_LOCATION-docker.pkg.dev
+    # Get the GKE credentials so we can deploy to the cluster
+    - name: Set up GKE credentials
+      uses: google-github-actions/get-gke-credentials@v0
+      with:
+        cluster_name: ${{ env.GKE_CLUSTER }}
+        location: ${{ env.GKE_ZONE }}
+
+    # Build the Docker image
+    - name: Build
+      run: |-
+        docker build \
+          --tag "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA" \
+          --build-arg GITHUB_SHA="$GITHUB_SHA" \
+          --build-arg GITHUB_REF="$GITHUB_REF" \
+          .
+    # Push the Docker image to Google Artifact Registry
+    - name: Publish
+      run: |-
+        docker push "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA"
+    # Set up kustomize
+    - name: Set up Kustomize
+      run: |-
+        curl -sfLo kustomize https://github.com/kubernetes-sigs/kustomize/releases/download/v3.1.0/kustomize_3.1.0_linux_amd64
+        chmod u+x ./kustomize
+    # Deploy the Docker image to the GKE cluster
+    - name: Deploy
+      run: |-
+        # replacing the image name in the k8s template
+        ./kustomize edit set image LOCATION-docker.pkg.dev/PROJECT_ID/REPOSITORY/IMAGE:TAG=$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA
+        ./kustomize build . | kubectl apply -f -
+        kubectl rollout status deployment/$DEPLOYMENT_NAME
+        kubectl get services -o wide
